@@ -113,7 +113,7 @@ describe('Component', () => {
       expect(annotations.id).toBe('page0')
       expect(annotations.label).toBe(undefined)
       expect(annotations['content']['ocr']).toEqual([])
-      expect(annotations['rendered_content']).toEqual(`<span style="direction: ltr;"><div class="textualbody"><iiif-annotation annotationurl='https://dnoneill.github.io/annotate/annotations/0001-1.json'></iiif-annotation></div></span>`)
+      expect(annotations['rendered_content']).toEqual(`<span style="direction: ltr;"><div class="describing"><iiif-annotation annotationurl='https://dnoneill.github.io/annotate/annotations/0001-1.json'></iiif-annotation></div></span>`)
       expect(wrapper.vm.$data.rendered).toEqual(true);
       wrapper.destroy()
     })
@@ -144,9 +144,9 @@ describe('Component', () => {
       await flushPromises()
       const annotations = wrapper.vm.$data.annotation_items[0];
       expect(annotations.image).toEqual(["<img src=\"https://iiif.lib.ncsu.edu/iiif/segIns_023/6270,3903,2250,2250/200,/0/default.jpg\" alt=\"Image section of &quot;undefined&quot;\" style=\"width: 200px;\">"])
-      expect(Object.keys(annotations).length).toBe(4)
+      expect(Object.keys(annotations).length).toBe(5)
       expect(annotations.fullImage).toEqual("https://iiif.lib.ncsu.edu/iiif/segIns_023/full/200,/0/default.jpg")
-      expect(Object.keys(annotations)).toEqual(["image", "altText", "id", "fullImage"])
+      expect(Object.keys(annotations)).toEqual(["image", "altText", "id", "content","fullImage"])
       expect(wrapper.vm.$data.rendered).toEqual(true);
       wrapper.destroy()
     })
@@ -190,7 +190,7 @@ describe('Component', () => {
       await wrapper.vm.$nextTick()
       await flushPromises()
       const annotations = wrapper.vm.$data.annotation_items[0];
-      expect(annotations.image).toEqual(["<div id=\"regular0_canvas_img0\"></div>"])
+      expect(annotations.image).toEqual(["<canvas id=\"regular0_canvas_img0\"></canvas>"])
       expect(Object.keys(annotations).length).toBe(9)
       expect(annotations.fullImage).toEqual("/annotate/assets/images/custom/spencer-davis-7ZpvOE2psxM-unsplash.jpg")
       expect(wrapper.vm.$data.rendered).toEqual(true);

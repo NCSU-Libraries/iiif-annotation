@@ -40,7 +40,9 @@ export default {
       annotation_items: [],
       rendered: '',
       languages: [],
-      annotationid: ''
+      annotationid: '',
+      textoverlay: false,
+      leaflet: false
     }
   },
   created() {
@@ -90,7 +92,7 @@ export default {
     changeLang: function(event){
       var lang = event.target ? event.target.value : event;
       for(var ai=0; ai<this.annotation_items.length; ai++){
-        this.annotation_items[ai]['rendered_content'] = shared.createContent(this.annotation_items[ai]['content'], lang)['anno'];
+        this.annotation_items[ai]['rendered_content'] = shared.createContent(this.annotation_items[ai]['content'], lang, true)['anno'];
       }
     },
     // Loop through annotations
@@ -148,9 +150,15 @@ export default {
       var isderivative = imageurl.indexOf('img/derivatives') > -1;
       var extension = shared.getExtension(canvasRegion['canvasId']);
       var path = canvasRegion['svg'];
+      var textoverlay = '';
+      const xywh = canvasRegion['canvasRegion'].split(',').map(elem => parseFloat(elem.trim()))
+      if (dictionary && dictionary['content'] && dictionary['content']['ocr'] && dictionary['content']['ocr'].length > 0){
+        this.textoverlay = true;
+        textoverlay = shared.textOverlayHTML(xywh, dictionary['content']['ocr'], path)
+      }
       isderivative ? imageurl = dictionary['fullImage'] : '';
       if (path && !isderivative) {
-        imagehtml = this.createSVG(imageurl, canvasRegion['canvasRegion'], dictionary, path, cn)
+        imagehtml = this.createSVG(imageurl, canvasRegion['canvasRegion'], dictionary, path, cn, textoverlay)
       } else {
         imagehtml = document.createElement("img");
         imagehtml.setAttribute('src', imageurl);
@@ -167,7 +175,7 @@ export default {
       }
       return imagehtml;
     },
-    createSVG: function(imageurl, regionCanvas, dictionary, path, position) {
+    createSVG: function(imageurl, regionCanvas, dictionary, path, position, textoverlay) {
       var id = dictionary['id'] + '-' + position;
       var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute('viewBox', regionCanvas.split(",").join(" "));
@@ -181,7 +189,7 @@ export default {
       path.setAttribute("fill", `url(#${id})`);
       path.setAttribute("fill-opacity", "1");
       path.setAttribute("stroke", "none");
-      svg.innerHTML = inner + path.outerHTML;
+      svg.innerHTML = inner + path.outerHTML + textoverlay;
       return svg;
     },
     writecanvas: function(img, xywh, id) {
@@ -229,9 +237,7 @@ export default {
       return {'fullImage': fullImage, 'image': images}
     },
     getBeforeAfterText: function(dictionary, anno) {
-      var span = document.createElement('span');
-      span.innerHTML = dictionary['rendered_content'];
-      var text = (span.textContent || span.innerText).trim();
+      var text = shared.stripHTML(dictionary['rendered_content']);
       var index = anno.hits.match.indexOf(text);
       var before = anno.hits.match.substring(0, index).trim();
       var after = anno.hits.match.substring(index+text.length, ).trim();
@@ -243,13 +249,13 @@ export default {
     getImageData: function(i){
       var anno = this.anno[i];
       var dictionary = {'image':[]};
+      var dict = shared.chars(anno);
       if (this.settings.image_only !== true){
-        var dict = shared.chars(anno);
         this.languages = dict['languages'] ? [...new Set(this.languages.concat(dict['languages']))] : this.languages;
         var all_langs = dict['textual_body'].map(el => el.language);
         var langs = all_langs.filter(element => navigator.language.indexOf(element) > -1);
         this.currentlang = langs.length > 0 ? langs[0] : this.currentlang ? this.currentlang : dict['textual_body'][0] && dict['textual_body'][0]['language'];
-        dictionary['rendered_content'] = shared.createContent(dict, this.currentlang)['anno'];
+        dictionary['rendered_content'] = shared.createContent(dict, this.currentlang, true)['anno'];
         dictionary['content'] = dict;
         dictionary['id'] = this.annotationid + i;
         dictionary['altText'] = dict['ocr'].length > 0 ? dict['ocr'][0] : dict['label'] !== undefined ? dict['label'] : `Image section of "${this.manifest['label']}"`;
@@ -266,6 +272,7 @@ export default {
       } else {
         dictionary['altText'] = `Image section of "${this.manifest['label']}"`;
         dictionary['id'] = this.annotationid + i;
+        dictionary['content'] = dict;
         this.settings.hide_viewlarger = true;
       }
       return dictionary;

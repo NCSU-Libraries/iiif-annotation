@@ -3,6 +3,7 @@
   <div style="position:relative;" v-bind:class="[!settings.annoview || shown == false ? 'defaultview' : settings.annoview == 'sidebyside' || settings.annoview == 'scrollview' ? 'sidebyside' : 'collapse']">
     <div v-bind:id="seadragonid" v-bind:class="[!settings.fullpage && !fullscreen ? 'seadragonbox' : 'seadragonboxfull', settings.toolbarposition && !$parent.multi ? settings.toolbarposition + '_menu_container' : 'default_menu_container']" style="position:relative">
       <toolbar v-if="!$parent.multi"></toolbar>
+      <div v-if="rendered" v-html="rendered" style="position: relative; top: 50%;text-align: center;"></div>
       <annotationbox v-if="settings.annoview != 'sidebyside' && settings.annoview != 'scrollview'"></annotationbox>
     </div>
     <annotationbox v-if="settings.annoview == 'sidebyside' || settings.annoview == 'scrollview'"></annotationbox>
@@ -17,6 +18,7 @@ import openseadragon from 'openseadragon';
 import fullscreen from 'vue-fullscreen';
 import Vue from 'vue';
 import shared from './shared';
+
 import SocketIO from 'socket.io-client';
 import annotationbox from './annotationbox';
 import toolbar from './toolbar';
@@ -64,16 +66,23 @@ export default {
       isautorunning: '',
       buttons: JSON.parse(JSON.stringify(shared.buttons)),
       settings: {},
+      textoverlay: {
+        'opacity': 100,
+        'fontcolor': '#000000',
+        'background': ''
+      },
       currentlang: '',
       languages: [],
       fullscreen: false,
       tagslist: {},
       annoinfo: {'text': '', 'annodata': []},
-      imageinfo: {'text': '', 'label': 'Manifest information'},
+      imageinfo: {'text': '', 'label': 'Image information'},
       imagetitle: '',
       layerslist: [],
       shortcuts: {},
-      basecompontent: ''
+      basecompontent: '',
+      rendered: '',
+      leaflet: false
     }
   },
   created() {
@@ -87,13 +96,13 @@ export default {
     isIE ? this.settings.tts = false : '';
     this.imagetitle = this.settings.title ? this.settings.title : '';
     var isURL = shared.isURL(annotationurl, this.settings);
-    this.seadragonid = isURL['id'] + '_storyboard';
+    this.seadragonid = 'storyboard_' + isURL['id'];
     this.settings.index ? this.seadragonid += `_${this.settings.index}` : '';
-    this.settings.annoview == 'collapse' ? this.buttons.hide_button = '<i class="fas fa-caret-left"></i>' : '';
+    this.settings.annoview == 'collapse' ? this.buttons.hide = '<i class="fas fa-caret-left"></i>' : '';
     if(isURL['isURL']){
       axios.get(annotationurl).then(response => {
         this.parseAnnoData(response.data, annotationurl, isURL['isURL'])
-      });
+      }).catch((error) => {this.renderError(annotationurl)});
     }
   },
   watch: {
@@ -130,6 +139,13 @@ export default {
         }
       }
     },
+    renderError: function(url) {
+      if (this.basecompontent.manifestcontents){
+        this.getManifestData()
+      } else {
+        this.rendered = `There was a error with <a href="${url}">${url}</a>`;
+      }
+    },
     parseAnnoData: function(annotation, annotationurl, isURL){
       this.imagetitle = this.settings.title ? this.imagetitle : annotation.label;
       var anno = shared.getAnnotations(annotation);
@@ -163,6 +179,9 @@ export default {
         }
         content_data = Object.assign({}, content_data, {'section':sections, 'type':type, svg_path: svg_path})
         this.annotations.push(content_data);
+        if (content_data['geometry']){
+          this.leaflet = 'true';
+        }
         if (content_data['styles']) {
           if (content_data['styles']['overlay'] && !this.settings.overlaycolor){
             this.settings.overlaycolor = content_data['styles']['overlay'];
@@ -312,10 +331,10 @@ export default {
     },
     // Get image info from manifest; This populates the info button for the image.
     getImageInfo: function(canvas_data, manifestlink){
-      var metadata = [{'label': 'Manifest', 'value' : `<a href="${manifestlink}" target="_blank">${manifestlink}</a>`},{'label':'title', 'value': canvas_data.data.label}, {'label':'description', 'value': canvas_data.data.description},
-      {'label': 'attribution', 'value': canvas_data.data.attribution},{'label': 'license', 'value': canvas_data.data.license}]
-      metadata = canvas_data.data.metadata ? metadata.concat(canvas_data.data.metadata) : metadata;
-      canvas_data.data.sequences && canvas_data.data.sequences[0].canvases.length == 1 ? this.imageinfo.label = 'Image information' : '';
+      var metadata = [{'label': 'Manifest', 'value' : `<a href="${manifestlink}" target="_blank">${manifestlink}</a>`},{'label':'title', 'value': canvas_data.label}, {'label':'description', 'value': canvas_data.description},
+      {'label': 'attribution', 'value': canvas_data.attribution},{'label': 'license', 'value': canvas_data.license}]
+      metadata = canvas_data.metadata ? metadata.concat(canvas_data.metadata) : metadata;
+      canvas_data.sequences && canvas_data.sequences[0].canvases.length > 1 ? this.imageinfo.label = 'Manifest information' : '';
       for (var j=0; j<metadata.length; j++){
         var label = shared.parseMetaFields(metadata[j]['label']);
         var value = shared.parseMetaFields(metadata[j]['value']);
@@ -330,7 +349,7 @@ export default {
     // Create TOC for each annotation; Gets a list of annotations and corresponding data
     getAnnoInfo: function(content_data, i){
       var title = content_data['label'] ? `${i+1}. ${content_data['label']}` : `Annotation ${i+1}`;
-      var content = shared.createContent(content_data, this.currentlang, true)['anno'];
+      var content = shared.createContent(content_data, this.currentlang)['anno'];
       var additionaltext = `
         ${ content ? `${this.$options.filters.truncate(content, 5)}<br>` : ``}
         ${content_data['authors'] ? `<b>Authors:</b> ${content_data['authors']}<br>` : ``}
@@ -423,7 +442,31 @@ export default {
           element: elem,
           location: rect
         });
+        //set viewBox based on section. SVG will not show up without this.
         this.addTracking(elem, rect, position, this);
+        if (annotation.ocr.length > 0){
+          //var elem2 = elem.cloneNode(true);
+          var innerHTML;
+          xywh = xywh.map(elem => parseFloat(elem))
+          var svgpathelem = elem.getElementsByTagName('svg').length > 0 ? elem.getElementsByTagName('svg')[0].childNodes[0] : "";
+          innerHTML = shared.textOverlayHTML(xywh, annotation.ocr, svgpathelem);
+          var elem2 = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            //set viewBox based on section. SVG will not show up without this.
+          elem2.setAttribute('viewBox', xywh.join(" "));
+          elem2.setAttribute('style', 'position: absolute;');
+          elem2.id = `ocr-position${position}`;
+          elem2.classList = 'textoverlay';
+          elem2.style.userSelect = 'text';
+          elem2.style.display = 'none';
+          elem2.innerHTML +=  innerHTML;    
+          this.viewer.addOverlay({
+            element: elem2,
+            location: rect
+          });
+          new openseadragon.MouseTracker({
+            element: elem2
+          }).setTracking(true);
+        }
       }
     },
     //play pause TTS if enabled. Called when playpause button pressed.
@@ -431,17 +474,17 @@ export default {
       var synth = window.speechSynthesis;
       if (synth.paused){
         synth.resume();
-        this.buttons.playpause = '<i class="fas fa-pause"></i>';
+        this.buttons.playpause = shared.buttons['playpauseoff'];
       } else if (!synth.speaking) {
         this.ttscontent();
-        this.buttons.playpause = '<i class="fas fa-pause"></i>';
+        this.buttons.playpause = shared.buttons['playpauseoff'];
       } else {
         synth.pause();
-        this.buttons.playpause = '<i class="fas fa-play"></i>';
+        this.buttons.playpause = shared.buttons['playpause'];
       }
     },
     ttscontent: function(){
-      var content = this.annotations[this.position] ? shared.createContent(this.annotations[this.position], this.currentlang, true) : '';
+      var content = this.annotations[this.position] ? shared.createContent(this.annotations[this.position], this.currentlang) : '';
       content ? this.tts(content[this.shown]) : '';
     },
     // call function and send broadcast to WS server if enabled
@@ -467,12 +510,13 @@ export default {
     //Hide annotation if hide button pressed
     hide: function(){
       this.removeHeight();
+      const hidesetting =  this.settings.annoview == 'collapse' ? 'collapsehide' : 'hide';
       if(this.booleanitems.isexcerpt){
         this.booleanitems.isexcerpt = false;
-        this.buttons.hide_button = this.settings.annoview == 'collapse' ? '<i class="fas fa-caret-left"></i>' : '<i class="fas fa-caret-up"></i>' ;
+        this.buttons.hide = shared.buttons[hidesetting];
       } else {
         this.booleanitems.isexcerpt = true;
-        this.buttons.hide_button = this.settings.annoview == 'collapse' ? '<i class="fas fa-caret-right"></i>' : '<i class="fas fa-caret-down"></i>';
+        this.buttons.hide = shared.buttons[`${hidesetting}off`];
       }
     },
     //when specified button clicked change shown value
@@ -502,10 +546,10 @@ export default {
       this.setDefaultButtons();
     },
     setDefaultButtons: function() {
-      this.buttons.info = '<i class="fas fa-info-circle"></i>';
-      this.buttons.layer = '<i class="fas fa-layer-group"></i>';
-      this.buttons.tags = '<i class="fas fa-tag"></i>';
-      this.buttons.keyboard = '<i class="fas fa-keyboard"></i>';
+      const fields = ['info', 'layer', 'tags', 'keyboard', 'textoverlay']
+      for (var fi=0; fi<fields.length; fi++){
+        this.buttons[fields[fi]] = shared.buttons[fields[fi]];
+      }
       this.buttons.anno = !this.booleanitems.istranscription ? '<i class="fas fa-pen-nib"></i>' : '<i class="fas fa-file-alt"></i>';
     },
     //Set all buttons to correct value, change specified button and shown value
@@ -546,11 +590,11 @@ export default {
       }
       var areviewable = Object.values(this.tagslist).map(element => element['checked']);
       if (areviewable.indexOf(true) === -1){
-        this.buttons.overlaybutton = '<i class="fas fa-toggle-on"></i>';
         this.booleanitems.isoverlaytoggled = false;
+        this.buttons.overlay = shared.buttons['overlay'];
       } else {
-        this.buttons.overlaybutton = '<i class="fas fa-toggle-off"></i>';
         this.booleanitems.isoverlaytoggled = true;
+        this.buttons.overlay = shared.buttons['overlayoff'];
       }
       //This is the only way to ensure checkboxes update
       this.shown = false;
@@ -558,14 +602,23 @@ export default {
     },
     //get Manifest data from manifest and get layerdata
     getManifestData: function(manifestlink, canvas, canvasId){
-        axios.get(manifestlink).then(canvas_data => {
-          this.getImageInfo(canvas_data, manifestlink)
-          var get_canvas = shared.matchCanvas(canvas_data.data, canvas, this.imagetitle);
-          this.imagetitle = get_canvas['title'];
-          var images = get_canvas['images'];
-          this.getLayerData(images);
-          this.buildseadragon(canvasId);
-      });
+        if (this.basecompontent.annotationurl && this.basecompontent.annotationurl.images){
+          this.manifestDataFunctions(manifestlink, this.basecompontent.manifestcontents, canvas, canvasId, this.basecompontent.annotationurl.images)
+        } else if (this.basecompontent.manifestcontents) {
+          this.manifestDataFunctions(manifestlink, this.basecompontent.manifestcontents, canvas, canvasId)
+        } else {
+          axios.get(manifestlink).then(canvas_data => {
+            this.manifestDataFunctions(manifestlink, canvas_data.data, canvas, canvasId)
+          }).catch((error) => {this.renderError(manifestlink)});
+        }
+    },
+    manifestDataFunctions: function(manifestlink, canvas_data, canvas, canvasId, images='') {
+      this.getImageInfo(canvas_data, manifestlink)
+      var get_canvas = shared.matchCanvas(canvas_data, canvas, this.imagetitle, images);
+      this.imagetitle = get_canvas['title'];
+      var canvsimgs = get_canvas['images'];
+      this.getLayerData(canvsimgs);
+      this.buildseadragon(canvasId);
     },
     //set defaults before creating viewer and then create viewer
     buildseadragon: function(canvasId){
@@ -588,6 +641,7 @@ export default {
       this.settings.autorun_interval = this.settings.autorun_interval ? this.settings.autorun_interval : 3;
       this.mapmarker = this.settings.mapmarker ? this.settings.mapmarker : this.mapmarker;
       this.tagslistShortcuts();
+      this.imageinfo.text += `<div id="imageurl"><b>Image URL: </b><a href="${this.seadragontile}" target="_blank">${this.seadragontile}</a></div>`
     },
     //get any layers in manfiest and get custom layers. This is called for all viewers and will get the tile if there are no layers
     getLayerData: function(images) {
@@ -599,6 +653,7 @@ export default {
         const resourceid = images[i].resource ? shared.getId(images[i].resource) : '';
         var xywh = resourceid && resourceid.constructor.name === 'String' && resourceid.indexOf('xywh') > -1 ? resourceid : shared.on_structure(images[i]) && shared.on_structure(images[i])[0].constructor.name === 'String' ? shared.on_structure(images[i])[0] : '';
         xywh = xywh ? xywh.split("xywh=").slice(-1)[0].split(",") : xywh;
+        xywh = xywh.length > 1 ? xywh : ''
         var label = imgResource.label ? imgResource.label : `Layer ${i + 1}`;
         var checked = this.settings.togglelayers || i == 0 ? true : false;
         var opacity = this.settings.togglelayers || i == 0 ? 1 : 0;
@@ -681,9 +736,7 @@ export default {
     tts: function(text){
       var synth = window.speechSynthesis;
       synth.cancel();
-      var div = document.createElement("div");
-      div.innerHTML = text;
-      var speak = div.textContent;
+      var speak = shared.stripHTML(text);
       var speech = new SpeechSynthesisUtterance(speak);
       var lang = this.currentanno ? this.currentanno['language'] : '';
       speech.lang = lang ? lang : this.settings.tts;
@@ -694,7 +747,7 @@ export default {
       speech.voice = voice ? voice[0] : synth.getVoices()[0];
       var this_functions = this;
       speech.onstart = function() {
-        this_functions.buttons.playpause = '<i class="fas fa-pause"></i>';
+        this_functions.buttons.playpause = shared.buttons['playpauseoff'];
       }
       if (!text){
         this.autoRunTTS();
@@ -703,7 +756,7 @@ export default {
       }
       console.log("utterance", speech);
       synth.speak(speech);
-      this.buttons.playpause = '<i class="fas fa-pause"></i>';
+      this.buttons.playpause = shared.buttons['playpauseoff'];
     },
     // Makes sure that autoRun waits for TTS to finish
     autoRunTTS: function(){
@@ -720,27 +773,35 @@ export default {
         clearTimeout(this.isautorunning);
       }
       if(!window.speechSynthesis.speaking && !window.speechSynthesis.pending){
-        this.buttons.playpause = '<i class="fas fa-play"></i>';
+        this.buttons.playpause = shared.buttons['playpause'];
       }
     },
     //toggles created overlays;
-    createOverlay: function(){
-      var box_elements = this.anno_elem.getElementsByClassName("overlay");
+    createOverlay: function(classname){
+      classname = classname ? classname : 'overlay';
+      var box_elements = this.anno_elem.getElementsByClassName(classname);
       var display_setting;
       var checked;
-      if (this.booleanitems.isoverlaytoggled){
+      var togglestatus = this.booleanitems[`is${classname}toggled`];
+      if (togglestatus){
         display_setting = 'none';
         checked = false;
-        this.booleanitems.isoverlaytoggled = false;
-        this.buttons.overlaybutton = '<i class="fas fa-toggle-on"></i>';
+        this.booleanitems[`is${classname}toggled`] = false;
+        if (shared.buttons[`${classname}off`]){
+          this.buttons[classname] = shared.buttons[classname];
+        }
       } else {
         display_setting = 'block';
         checked = true;
-        this.booleanitems.isoverlaytoggled = true;
-        this.buttons.overlaybutton = '<i class="fas fa-toggle-off"></i>';
+        this.booleanitems[`is${classname}toggled`] = true;
+        if (shared.buttons[`${classname}off`]){
+          this.buttons[classname] = shared.buttons[`${classname}off`];
+        }
       }
-      for (var key in this.tagslist){
-        this.tagslist[key].checked = checked;
+      if (classname == 'overlay'){
+        for (var key in this.tagslist){
+          this.tagslist[key].checked = checked;
+        }
       }
       for (var a=0; a<box_elements.length; a++){
         box_elements[a].style.display = display_setting;
@@ -843,7 +904,7 @@ export default {
       } else {
         this.position = this.position;
       }
-      if(this.buttons.overlaybutton.indexOf('toggle-off') == -1){
+      if(this.buttons.overlay.indexOf('toggle-off') == -1){
         var multielements = document.getElementsByClassName("multi");
         for (var we=0; we<multielements.length; we++){
           multielements[we].style.display = "none";
@@ -1009,11 +1070,11 @@ export default {
             this_functions.next('next');
           }, interval);
         }
-        this.buttons.autorunbutton = '<i class="fas fa-stop-circle"></i>';
+        this.buttons.autorun = shared.buttons['autorunoff'];
       } else {
         clearInterval(this.isautorunning);
         this.isautorunning = '';
-        this.buttons.autorunbutton = '<i class="fas fa-magic"></i>';
+        this.buttons.autorun = shared.buttons['autorun'];
       }
     },
     createAnnoContent: function(anno) {
@@ -1021,7 +1082,7 @@ export default {
       var transcriptcontent = []
       if (Array.isArray(anno)) {
         for (var i=0; i<anno.length; i++){
-          var multicreateContent = shared.createContent(anno[i], this.currentlang, true);
+          var multicreateContent = shared.createContent(anno[i], this.currentlang);
           if (multicreateContent['anno']){
             annocontent.push(multicreateContent['anno']);
           }
@@ -1032,7 +1093,7 @@ export default {
         annocontent = annocontent.join("<hr>");
         transcriptcontent = transcriptcontent.join("<hr>")
       } else {
-        var createContent = shared.createContent(anno, this.currentlang, true);
+        var createContent = shared.createContent(anno, this.currentlang);
         transcriptcontent = createContent['transcription'];
         annocontent = createContent['anno'];
       }
@@ -1054,9 +1115,7 @@ export default {
     truncate: function(string, words_length) {
       string = string ? string.split('<div class="tags">')[0] : '';
       string = string ? string.split('<div class="authorship">')[0] : '';
-      var tmp = document.createElement("DIV");
-      tmp.innerHTML = string;
-      var text = tmp.textContent || tmp.innerText || "";
+      var text = shared.stripHTML(string);
       return truncate(text, words_length, { byWords: true });
     }
   }
